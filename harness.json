@@ -1,0 +1,475 @@
+{
+  "harness": {
+    "project": "SmartLead",
+    "version": "1.0.0",
+    "description": "Harness configuration for SmartLead AI-Powered Lead Scoring System deployment and operations",
+    "created_date": "2026-03-04"
+  },
+  "infrastructure_harness": {
+    "terraform": {
+      "required_providers": [
+        {
+          "source": "hashicorp/azurerm",
+          "version": "~> 3.0"
+        },
+        {
+          "source": "hashicorp/kubernetes",
+          "version": "~> 2.0"
+        },
+        {
+          "source": "hashicorp/helm",
+          "version": "~> 2.0"
+        }
+      ],
+      "resources": [
+        "azurerm_resource_group",
+        "azurerm_kubernetes_cluster",
+        "azurerm_postgresql_flexible_server",
+        "azurerm_redis_cache",
+        "azurerm_storage_account",
+        "azurerm_eventhub_namespace",
+        "azurerm_eventhub",
+        "azurerm_container_registry"
+      ],
+      "modules": [
+        "aks-cluster",
+        "postgres-flexible",
+        "redis-cache",
+        "storage-account",
+        "event-hubs",
+        "container-registry"
+      ]
+    },
+    "kubernetes": {
+      "base_manifests": [
+        "api-deployment.yaml",
+        "mlflow-deployment.yaml",
+        "airflow-deployment.yaml",
+        "service.yaml",
+        "ingress.yaml",
+        "configmap.yaml"
+      ],
+      "overlays": [
+        "development",
+        "staging",
+        "production"
+      ],
+      "helm_charts": [
+        {
+          "name": "airflow",
+          "repo": "https://airflow.apache.org",
+          "version": "1.8.0"
+        },
+        {
+          "name": "prometheus",
+          "repo": "https://prometheus-community.github.io/helm-charts",
+          "version": "25.0.0"
+        },
+        {
+          "name": "grafana",
+          "repo": "https://grafana.github.io/helm-charts",
+          "version": "6.50.0"
+        }
+      ]
+    },
+    "docker": {
+      "images": [
+        {
+          "name": "smartlead-api",
+          "dockerfile": "docker/Dockerfile.api",
+          "context": "."
+        },
+        {
+          "name": "data-quality",
+          "dockerfile": "docker/Dockerfile.data-quality",
+          "context": "."
+        },
+        {
+          "name": "feature-engineering",
+          "dockerfile": "docker/Dockerfile.feature-engineering",
+          "context": "."
+        },
+        {
+          "name": "model-training",
+          "dockerfile": "docker/Dockerfile.model-training",
+          "context": "."
+        },
+        {
+          "name": "model-validation",
+          "dockerfile": "docker/Dockerfile.model-validation",
+          "context": "."
+        }
+      ]
+    }
+  },
+  "deployment_harness": {
+    "ci_cd": {
+      "platform": "GitHub Actions",
+      "workflows": [
+        {
+          "name": "deploy.yml",
+          "triggers": ["push", "pull_request"],
+          "stages": [
+            "test",
+            "lint-and-format",
+            "build-and-push",
+            "deploy-infrastructure",
+            "deploy-to-aks",
+            "smoke-tests",
+            "notify"
+          ]
+        }
+      ]
+    },
+    "environments": [
+      {
+        "name": "development",
+        "namespace": "smartlead-dev",
+        "replicas": {
+          "api": 1,
+          "mlflow": 1,
+          "airflow": 1
+        },
+        "autoscaling": false
+      },
+      {
+        "name": "staging",
+        "namespace": "smartlead-staging",
+        "replicas": {
+          "api": 2,
+          "mlflow": 1,
+          "airflow": 2
+        },
+        "autoscaling": true
+      },
+      {
+        "name": "production",
+        "namespace": "smartlead",
+        "replicas": {
+          "api": 3,
+          "mlflow": 2,
+          "airflow": 3
+        },
+        "autoscaling": true
+      }
+    ],
+    "deployment_strategies": [
+      {
+        "name": "rolling-update",
+        "type": "kubernetes-rolling",
+        "max_surge": "25%",
+        "max_unavailable": "25%"
+      },
+      {
+        "name": "blue-green",
+        "type": "istio-canary",
+        "traffic_percentage": "10-50-100"
+      }
+    ]
+  },
+  "testing_harness": {
+    "unit_tests": {
+      "framework": "pytest",
+      "coverage_threshold": 90,
+      "command": "pytest tests/unit --cov=src --cov-report=xml"
+    },
+    "integration_tests": {
+      "framework": "pytest",
+      "command": "pytest tests/integration",
+      "dependencies": ["testcontainers", "localstack"]
+    },
+    "e2e_tests": {
+      "framework": "playwright",
+      "command": "pytest tests/e2e",
+      "environments": ["staging", "production"]
+    },
+    "load_tests": {
+      "tool": "locust",
+      "scenarios": [
+        "normal-load",
+        "peak-load",
+        "stress-test"
+      ],
+      "targets": [
+        {
+          "endpoint": "/score-lead",
+          "rps": 1000,
+          "duration": "30m"
+        }
+      ]
+    },
+    "chaos_tests": {
+      "framework": "chaos-mesh",
+      "experiments": [
+        "pod-kill",
+        "network-partition",
+        "cpu-stress",
+        "memory-stress"
+      ]
+    }
+  },
+  "monitoring_harness": {
+    "metrics": {
+      "prometheus": {
+        "retention": "15months",
+        "scrape_interval": "15s",
+        "targets": [
+          "smartlead-api",
+          "mlflow-tracking",
+          "airflow"
+        ]
+      },
+      "custom_metrics": [
+        "lead_score_predictions_total",
+        "model_inference_latency_seconds",
+        "feature_store_fetch_duration_seconds",
+        "prediction_confidence_score"
+      ]
+    },
+    "logging": {
+      "aggregation": "loki",
+      "retention": "90days",
+      "structured": true,
+      "log_levels": {
+        "default": "INFO",
+        "debug": ["api", "ml_service"]
+      }
+    },
+    "tracing": {
+      "backend": "jaeger",
+      "sampling_rate": 0.1,
+      "services": ["smartlead-api", "mlflow-tracking"],
+      "propagation": "w3c"
+    },
+    "alerting": {
+      "channels": [
+        {
+          "type": "slack",
+          "webhook": "${SLACK_WEBHOOK_URL}"
+        },
+        {
+          "type": "pagerduty",
+          "service_key": "${PAGERDUTY_KEY}"
+        }
+      ],
+      "rules": [
+        {
+          "name": "high-error-rate",
+          "condition": "error_rate > 0.05",
+          "severity": "critical",
+          "action": "page_on_call"
+        },
+        {
+          "name": "high-latency",
+          "condition": "p99_latency > 1000ms",
+          "severity": "warning",
+          "action": "notify_team"
+        },
+        {
+          "name": "model-degradation",
+          "condition": "model_auc < 0.85",
+          "severity": "critical",
+          "action": "page_on_call"
+        }
+      ]
+    },
+    "dashboards": [
+      {
+        "name": "SmartLead MLOps Dashboard",
+        "panels": [
+          "Model Performance (AUC)",
+          "Prediction Latency (p99)",
+          "Feature Drift Score",
+          "Daily Predictions"
+        ]
+      },
+      {
+        "name": "API Metrics Dashboard",
+        "panels": [
+          "Request Rate",
+          "Error Rate",
+          "Response Time",
+          "Active Connections"
+        ]
+      }
+    ]
+  },
+  "resilience_harness": {
+    "circuit_breaker": {
+      "enabled": true,
+      "failure_threshold": 5,
+      "timeout": 30,
+      "half_open_max_requests": 3,
+      "services": ["smartlead-api", "mlflow-tracking"]
+    },
+    "retry_policy": {
+      "max_attempts": 3,
+      "backoff": "exponential",
+      "initial_interval": 1000,
+      "max_interval": 30000,
+      "jitter": true
+    },
+    "bulkhead": {
+      "enabled": true,
+      "max_concurrent_calls": 100,
+      "max_waiting_threads": 50
+    },
+    "fallback": {
+      "enabled": true,
+      "strategies": [
+        {
+          "service": "ml-prediction",
+          "fallback": "cached-prediction",
+          "condition": "timeout_or_error"
+        },
+        {
+          "service": "feature-store",
+          "fallback": "default-features",
+          "condition": "unavailable"
+        }
+      ]
+    }
+  },
+  "security_harness": {
+    "network_policies": {
+      "enabled": true,
+      "ingress": [
+        {
+          "from": "ingress-nginx",
+          "ports": [8000]
+        }
+      ],
+      "egress": [
+        {
+          "to": "postgres",
+          "ports": [5432]
+        },
+        {
+          "to": "valkey-cache",
+          "ports": [6379]
+        }
+      ]
+    },
+    "secrets_management": {
+      "provider": "azure-key-vault",
+      "csi_driver": true,
+      "sealed_secrets": true
+    },
+    "tls": {
+      "version": "1.3",
+      "cert_manager": true,
+      "issuer": "lets-encrypt"
+    },
+    "authentication": {
+      "oauth2": true,
+      "provider": "azure-ad",
+      "rate_limiting": {
+        "enabled": true,
+        "requests_per_minute": 1000
+      }
+    }
+  },
+  "data_harness": {
+    "schemas": {
+      "leads": {
+        "columns": [
+          "lead_id (UUID)",
+          "email (VARCHAR)",
+          "company_size (VARCHAR)",
+          "industry (VARCHAR)",
+          "job_title (VARCHAR)",
+          "traffic_source (VARCHAR)",
+          "created_at (TIMESTAMP)",
+          "updated_at (TIMESTAMP)",
+          "last_activity_at (TIMESTAMP)"
+        ],
+        "indexes": ["idx_leads_email", "idx_leads_created"]
+      },
+      "predictions": {
+        "columns": [
+          "prediction_id (UUID)",
+          "lead_id (UUID)",
+          "model_version (VARCHAR)",
+          "conversion_probability (DECIMAL)",
+          "lead_grade (CHAR)",
+          "feature_vector (JSONB)",
+          "shap_explanation (JSONB)",
+          "created_at (TIMESTAMP)"
+        ],
+        "indexes": ["idx_predictions_lead", "idx_predictions_time"]
+      },
+      "feature_values": {
+        "columns": [
+          "entity_key (VARCHAR)",
+          "feature_name (VARCHAR)",
+          "feature_value (JSONB)",
+          "event_timestamp (TIMESTAMP)",
+          "created_timestamp (TIMESTAMP)"
+        ],
+        "indexes": ["idx_feature_lookup"]
+      }
+    },
+    "migrations": {
+      "tool": "alembic",
+      "directory": "migrations"
+    }
+  },
+  "mlops_harness": {
+    "model_registry": {
+      "name": "lead_conversion_predictor",
+      "stages": ["Staging", "Production"],
+      "tracking_uri": "http://mlflow-tracking:5000"
+    },
+    "feature_store": {
+      "name": "smartlead",
+      "provider": "azure",
+      "online_store": "redis",
+      "offline_store": "azure-blob"
+    },
+    "pipelines": {
+      "training": {
+        "name": "lead_scoring_pipeline",
+        "schedule": "0 2 * * *",
+        "framework": "kubeflow"
+      },
+      "feature_materialization": {
+        "schedule": "0 * * * *",
+        "incremental": true
+      }
+    },
+    "model_validation": {
+      "framework": "evidently",
+      "metrics": ["data_drift", "target_drift"],
+      "threshold": {
+        "drift_score": 0.1,
+        "auc": 0.85
+      }
+    }
+  },
+  "automation_harness": {
+    "scripts": {
+      "deploy_infrastructure": "scripts/deploy-infra.sh",
+      "deploy_application": "scripts/deploy-app.sh",
+      "run_tests": "scripts/run-tests.sh",
+      "model_training": "scripts/train-model.sh",
+      "data_validation": "scripts/validate-data.sh"
+    },
+    "cron_jobs": [
+      {
+        "name": "feature-materialization",
+        "schedule": "0 * * * *",
+        "command": "feast materialize-incremental"
+      },
+      {
+        "name": "model-retraining",
+        "schedule": "0 2 * * *",
+        "command": "python pipelines/lead_scoring_pipeline.py"
+      },
+      {
+        "name": "data-quality-check",
+        "schedule": "0 */6 * * *",
+        "command": "python scripts/data_quality_check.py"
+      }
+    ]
+  }
+}

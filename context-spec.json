@@ -1,0 +1,165 @@
+{
+  "context_specification": {
+    "project": {
+      "id": "smartlead",
+      "name": "SmartLead - AI-Powered Lead Scoring System",
+      "version": "1.0.0",
+      "description": "Machine learning system for lead conversion prediction deployed on Azure using open-source technologies",
+      "domain": "MLOps / AI-Powered Business Applications",
+      "organization": "Dulux Tech",
+      "methodology": "Spec-Driven Development"
+    },
+    "architecture": {
+      "compute": {
+        "platform": "Azure Kubernetes Service (AKS)",
+        "kubernetes_version": "1.28+",
+        "node_pool": "Standard_D4s_v3 (4 vCPU, 16 GB RAM)",
+        "min_nodes": 2,
+        "max_nodes": 6,
+        "os": "Ubuntu 22.04 LTS",
+        "network": "Azure CNI with Calico policies"
+      },
+      "api_layer": {
+        "framework": "FastAPI 0.104+",
+        "server": "Uvicorn (ASGI) with Gunicorn workers",
+        "workers": 4,
+        "timeout": "120s",
+        "max_requests": 10000,
+        "endpoints": [
+          "/score-lead",
+          "/batch-score",
+          "/health",
+          "/metrics"
+        ]
+      },
+      "database": {
+        "type": "Azure Database for PostgreSQL (Flexible Server)",
+        "version": "PostgreSQL 14",
+        "sku": "Burstable_B2ms (dev) / GeneralPurpose_D3s_v3 (prod)",
+        "storage": "128GB SSD, auto-grow enabled",
+        "backup_retention": "7 days",
+        "high_availability": "Zone redundant (production)",
+        "connection_pooling": "PgBouncer sidecar",
+        "extensions": ["PostGIS", "pg_stat_statements", "TimescaleDB"]
+      },
+      "cache": {
+        "type": "Azure Cache for Redis (Valkey-compatible)",
+        "tier": "Standard C1 (1 GB) dev / Premium P1 (6 GB) prod",
+        "version": "Redis 7.0",
+        "persistence": "AOF enabled",
+        "maxmemory_policy": "allkeys-lru"
+      },
+      "storage": {
+        "type": "Azure Blob Storage with MinIO Gateway",
+        "tier": "Hot (active) / Cool (archives)",
+        "replication": "LRS (dev) / GRS (prod)",
+        "lifecycle": "Auto-archive after 90 days"
+      },
+      "streaming": {
+        "type": "Azure Event Hubs with Kafka Protocol",
+        "tier": "Standard",
+        "partitions": 4,
+        "retention": "7 days",
+        "capture": "Enabled to Blob Storage"
+      },
+      "ml_platform": {
+        "tracking": {
+          "tool": "MLflow 2.11+ (self-hosted)",
+          "replicas": 2,
+          "backend_store": "PostgreSQL",
+          "artifact_store": "Azure Blob (via MinIO)"
+        },
+        "feature_store": {
+          "tool": "Feast 0.35+",
+          "registry": "PostgreSQL",
+          "online_store": "Redis/Valkey",
+          "offline_store": "Azure Blob (Parquet)"
+        },
+        "training": {
+          "platform": "Kubeflow Pipelines on AKS",
+          "orchestration": "Argo Workflows",
+          "sdk": "kfp 2.7+"
+        },
+        "orchestration": {
+          "tool": "Apache Airflow 2.8+",
+          "executor": "CeleryExecutor",
+          "workers": 3,
+          "scheduler": "2 replicas (HA)"
+        }
+      },
+      "monitoring": {
+        "metrics": "Prometheus + Grafana",
+        "tracing": "Jaeger / OpenTelemetry",
+        "logging": "Loki / Azure Monitor"
+      }
+    },
+    "success_criteria": {
+      "api_availability": "99.9%",
+      "api_latency_p99": "<100ms",
+      "model_auc": ">0.85",
+      "feature_freshness": "<5 minutes",
+      "deployment_frequency": "10+/day",
+      "lead_time_for_changes": "<1 hour",
+      "mean_time_to_recovery": "<1 hour"
+    },
+    "technology_stack": {
+      "languages": ["Python 3.11", "TypeScript"],
+      "api_framework": "FastAPI",
+      "ml_frameworks": ["XGBoost", "scikit-learn", "PyTorch"],
+      "databases": ["PostgreSQL 14", "Redis 7", "MinIO"],
+      "orchestration": ["Airflow", "Kubeflow", "Argo"],
+      "infrastructure": ["Terraform", "Kubernetes", "Docker"],
+      "monitoring": ["Prometheus", "Grafana", "Jaeger"]
+    },
+    "components": {
+      "api": {
+        "name": "smartlead-api",
+        "replicas": 3,
+        "ports": [8000],
+        "health_endpoints": ["/health", "/ready"]
+      },
+      "mlflow": {
+        "name": "mlflow-tracking",
+        "replicas": 2,
+        "port": 5000
+      },
+      "airflow": {
+        "name": "airflow",
+        "webserver_replicas": 2,
+        "scheduler_replicas": 2,
+        "workers": 3
+      },
+      "minio": {
+        "name": "minio-gateway",
+        "replicas": 2,
+        "ports": [9000, 9001]
+      },
+      "redis": {
+        "name": "valkey-cache",
+        "port": 6379
+      }
+    },
+    "security": {
+      "network": "Azure NSGs, Calico network policies, private endpoints",
+      "identity": "Azure AD Workload Identity for pods, managed identities",
+      "secrets": "Azure Key Vault with CSI driver, sealed secrets for GitOps",
+      "encryption": "TLS 1.3 for transit, Azure-managed keys for storage",
+      "api_security": "OAuth2/OIDC via Azure AD, rate limiting, input validation"
+    },
+    "cost_optimization": {
+      "strategies": [
+        "Spot Instances for Airflow workers (70% savings)",
+        "Autoscaling (HPA for pods, cluster autoscaler for nodes)",
+        "Storage Tiering (Hot→Cool→Archive lifecycle policies)",
+        "Right-sizing (Resource requests/limits tuned per workload)",
+        "Dev/Test Shutdown (Automated AKS stop/start for non-prod)"
+      ]
+    },
+    "context_hierarchy": {
+      "level_1": "Enterprise",
+      "level_2": "Project Portfolio",
+      "level_3": "SmartLead",
+      "level_4": "Component/Service"
+    }
+  }
+}

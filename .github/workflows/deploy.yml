@@ -1,0 +1,305 @@
+# SmartLead CI/CD Pipeline
+# Spec-Driven: Generated from SmartLead/harness.json deployment_harness
+# GitHub Actions Workflow
+
+name: SmartLead CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  AZURE_CONTAINER_REGISTRY: smartleadacr
+  AKS_CLUSTER_NAME: smartlead-aks-prod
+
+jobs:
+  # ================== Lint & Test ==================
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest pytest-cov httpx
+    
+    - name: Run linters
+      run: |
+        pip install ruff black
+        ruff check src/
+        black --check src/
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/unit -v --cov=src --cov-report=xml --cov-report=term
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+
+  # ================== Build ==================
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix=
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push API image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: docker/Dockerfile.api
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Build and push other images
+      run: |
+        for image in data-quality feature-engineering model-training model-validation; do
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-$image:${{ github.sha }} -f docker/Dockerfile.$image .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-$image:${{ github.sha }}
+        done
+
+  # ================== Security Scan ==================
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Trivy scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Run Bandit
+      run: |
+        pip install bandit
+        bandit -r src/ -f json -o bandit-results.json
+      continue-on-error: true
+
+  # ================== Deploy Infrastructure ==================
+  deploy-infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: security
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+    
+    - name: Configure Azure credentials
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Terraform Init
+      run: |
+        cd terraform
+        terraform init
+      env:
+        ARM_USE_CLI: true
+    
+    - name: Terraform Plan
+      run: |
+        cd terraform
+        terraform plan -var-file=prod.tfvars -out=tfplan
+      env:
+        ARM_USE_CLI: true
+    
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main'
+      run: |
+        cd terraform
+        terraform apply -auto-approve
+      env:
+        ARM_USE_CLI: true
+
+  # ================== Deploy to AKS ==================
+  deploy-aks:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: service-principal
+        azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Login to Container Registry
+      run: |
+        echo "${{ secrets.AZURE_CREDENTIALS }}" | az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+        az acr login --name ${{ env.AZURE_CONTAINER_REGISTRY }}
+    
+    - name: Pull images
+      run: |
+        docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+    
+    - name: Tag for ACR
+      run: |
+        docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/smartlead-api:${{ github.sha }}
+    
+    - name: Push to ACR
+      run: |
+        docker push ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/smartlead-api:${{ github.sha }}
+    
+    - name: Deploy to Kubernetes
+      run: |
+        cd k8s
+        # Update image in deployment
+        cd base
+        sed -i 's|image: smartlead-api:latest|image: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/smartlead-api:${{ github.sha }}|' deployment.yaml
+        
+        # Apply manifests
+        kubectl apply -f .
+    
+    - name: Wait for deployment
+      run: |
+        kubectl rollout status deployment/smartlead-api --timeout=300s
+    
+    - name: Verify deployment
+      run: |
+        kubectl get pods -l app=smartlead-api
+        kubectl get services
+
+  # ================== Smoke Tests ==================
+  smoke-tests:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-aks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: pip install httpx pytest
+    
+    - name: Run smoke tests
+      run: |
+        python -c "
+        import httpx
+        import time
+        
+        # Wait for service to be ready
+        max_retries = 10
+        for i in range(max_retries):
+            try:
+                response = httpx.get('https://api.smartlead.example.com/health', timeout=10)
+                if response.status_code == 200:
+                    print('Service is healthy!')
+                    break
+            except Exception as e:
+                print(f'Retry {i+1}/{max_retries}: {e}')
+                time.sleep(10)
+        
+        # Test scoring endpoint
+        response = httpx.post(
+            'https://api.smartlead.example.com/score-lead',
+            json={
+                'lead_id': '123e4567-e89b-12d3-a456-426614174000',
+                'email': 'test@example.com',
+                'company_size': '1-10',
+                'industry': 'technology',
+                'job_title': 'CEO'
+            },
+            timeout=30
+        )
+        print(f'Score response: {response.status_code}')
+        assert response.status_code == 200
+        "
+    
+    - name: Report success
+      if: success()
+      run: echo "Smoke tests passed!"
+
+  # ================== Notify ==================
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [deploy-aks, smoke-tests]
+    if: always()
+    
+    steps:
+    - name: Send Slack notification
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        fields: repo,message,commit,author
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

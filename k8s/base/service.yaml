@@ -1,0 +1,36 @@
+# SmartLead API Service
+# Spec-Driven: Generated from SmartLead/harness.json kubernetes configuration
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: smartlead-api
+  labels:
+    app: smartlead-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: smartlead-api
+---
+# Headless service for pods discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: smartlead-api-headless
+  labels:
+    app: smartlead-api
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: smartlead-api
